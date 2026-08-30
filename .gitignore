@@ -1,2 +1,29 @@
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Python environments
+.venv/
 venv/
-.env/
+env/
+
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+build/
+dist/
+*.egg-info/
+
+# Generated retrieval indexes and user data
+faiss_index/
+uploads/
+*.pdf
+
+# IDE and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
