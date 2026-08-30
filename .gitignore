@@ -1,2 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
 venv/
-.env/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Generated indexes and uploads
+faiss_index/
+uploads/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

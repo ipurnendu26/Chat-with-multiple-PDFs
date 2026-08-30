@@ -1,100 +1,102 @@
-import streamlit as st
-from PyPDF2 import PdfReader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+"""Streamlit interface for private, session-scoped PDF question answering."""
+
+from __future__ import annotations
+
 import os
-from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain.vectorstores import FAISS
-from langchain.chat_models import ChatOpenAI
-from langchain.chains.question_answering import load_qa_chain
-from langchain.prompts import PromptTemplate
+
+import streamlit as st
 from dotenv import load_dotenv
+from langchain_community.vectorstores import FAISS
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
-# Load environment variables
+from rag_core import PROMPT, extract_pdf_pages, format_context, source_labels, split_pages
+
+MAX_FILE_BYTES = 20 * 1024 * 1024
+DEFAULT_MODEL = "gpt-4o-mini"
+
 load_dotenv()
-openai_api_key = os.getenv("OPENAI_API_KEY")
-
-# Function to extract text from PDF documents
-def get_pdf_text(pdf_docs):
-    text = ""
-    for pdf in pdf_docs:
-        pdf_reader = PdfReader(pdf)
-        for page in pdf_reader.pages:
-            text += page.extract_text()
-    return text
-
-# Function to split text into chunks
-def get_text_chunks(text):
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=5000, chunk_overlap=500)  # Smaller chunks
-    chunks = text_splitter.split_text(text)
-    return chunks
-
-# Function to create and save a FAISS vector store
-def get_vector_store(text_chunks):
-    embeddings = OpenAIEmbeddings(model="text-embedding-ada-002", openai_api_key=openai_api_key)
-    vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
-    vector_store.save_local("faiss_index")
-
-# Function to create a conversational chain
-def get_conversational_chain():
-    prompt_template = """
-    Answer the question as detailed as possible from the provided context. Make sure to provide all the details. If the answer is not in
-    the provided context, just say, \"answer is not available in the context\"; don't provide the wrong answer.
-
-    Context:
-    {context}
-
-    Question:
-    {question}
-
-    Answer:
-    """
-
-    model = ChatOpenAI(model="gpt-4", temperature=0.3, openai_api_key=openai_api_key)
-    prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
-    chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
-
-    return chain
-
-# Function to process user input and generate a response
-def user_input(user_question):
-    embeddings = OpenAIEmbeddings(model="text-embedding-ada-002", openai_api_key=openai_api_key)
-    
-    # Check if FAISS index exists
-    if not os.path.exists("faiss_index"):
-        st.error("FAISS index not found. Please upload and process PDF files first.")
-        return
-
-    # Load FAISS vector store
-    new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
-    docs = new_db.similarity_search(user_question)
-
-    chain = get_conversational_chain()
-    response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
-
-    st.write("Reply:", response["output_text"])
-
-# Main application function
-def main():
-    st.set_page_config(page_title="Chat with PDF", layout="wide")
-    st.header("Chat with PDF using OpenAI GPT 💁")
+st.set_page_config(page_title="Document Q&A", page_icon="📄", layout="wide")
 
 
-    # User question input
-    user_question = st.text_input("Ask a Question from the PDF Files")
+def get_api_key() -> str | None:
+    """Read the API key without displaying or persisting it."""
+    try:
+        secret = st.secrets.get("OPENAI_API_KEY")
+    except Exception:
+        secret = None
+    return secret or os.getenv("OPENAI_API_KEY")
 
-    if user_question:
-        user_input(user_question)
 
-    # Sidebar for PDF upload and processing
-    with st.sidebar:
-        st.title("Menu:")
-        pdf_docs = st.file_uploader("Upload your PDF Files and Click on the Submit & Process Button", accept_multiple_files=True)
-        if st.button("Submit & Process"):
-            with st.spinner("Processing..."):
-                raw_text = get_pdf_text(pdf_docs)
-                text_chunks = get_text_chunks(raw_text)
-                get_vector_store(text_chunks)
-                st.success("Done")
+def process_documents(uploaded_files, api_key: str) -> None:
+    invalid = [f.name for f in uploaded_files if f.size > MAX_FILE_BYTES]
+    if invalid:
+        raise ValueError("Each PDF must be 20 MB or smaller: " + ", ".join(invalid))
 
-if __name__ == "__main__":
-    main()
+    pages = extract_pdf_pages((f.name, f) for f in uploaded_files)
+    if not pages:
+        raise ValueError("No extractable text was found. Scanned PDFs require OCR before upload.")
+
+    documents = split_pages(pages)
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=api_key)
+    st.session_state.vector_store = FAISS.from_documents(documents, embeddings)
+    st.session_state.document_count = len(uploaded_files)
+    st.session_state.chunk_count = len(documents)
+
+
+def answer(question: str, api_key: str) -> tuple[str, list[str]]:
+    vector_store = st.session_state.get("vector_store")
+    if vector_store is None:
+        raise ValueError("Process at least one PDF before asking a question.")
+
+    documents = vector_store.similarity_search(question, k=4)
+    model_name = os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
+    model = ChatOpenAI(model=model_name, temperature=0, api_key=api_key)
+    messages = PROMPT.format_messages(context=format_context(documents), question=question)
+    response = model.invoke(messages)
+    return str(response.content), source_labels(documents)
+
+
+st.title("Document Q&A with cited retrieval")
+st.caption(
+    "Upload PDFs, build a session-scoped FAISS index, and receive answers grounded "
+    "in retrieved pages. Uploaded content and indexes are not committed to the repository."
+)
+
+api_key = get_api_key()
+if not api_key:
+    st.warning("Set OPENAI_API_KEY in your environment or Streamlit secrets before processing documents.")
+
+with st.sidebar:
+    st.header("Documents")
+    uploads = st.file_uploader(
+        "Upload one or more PDFs",
+        type=["pdf"],
+        accept_multiple_files=True,
+        help="Maximum 20 MB per file.",
+    )
+    if st.button("Process documents", type="primary", disabled=not uploads or not api_key):
+        try:
+            with st.spinner("Extracting and indexing documents..."):
+                process_documents(uploads, api_key)
+            st.success(
+                f"Indexed {st.session_state.document_count} document(s) "
+                f"into {st.session_state.chunk_count} chunks."
+            )
+        except Exception as exc:
+            st.error(f"Unable to process the documents: {exc}")
+
+question = st.text_input("Ask a question about the uploaded documents")
+if question:
+    if not api_key:
+        st.error("OPENAI_API_KEY is not configured.")
+    else:
+        try:
+            with st.spinner("Retrieving supporting passages..."):
+                response, sources = answer(question, api_key)
+            st.subheader("Answer")
+            st.write(response)
+            st.subheader("Retrieved sources")
+            for source in sources:
+                st.markdown(f"- {source}")
+        except Exception as exc:
+            st.error(str(exc))

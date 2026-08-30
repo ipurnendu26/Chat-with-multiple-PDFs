@@ -1,69 +1,71 @@
-# Chat with PDF using OpenAI GPT
+# Document Q&A with Cited Retrieval
 
-This project is a Streamlit application that allows users to chat with PDF documents using OpenAI's GPT model. Users can upload PDF files, process them, and then ask questions about the content of these documents.
+A session-scoped retrieval-augmented generation application for asking grounded questions across multiple PDF documents. The application extracts page text, creates metadata-preserving chunks, retrieves relevant passages with FAISS, and produces answers with file-and-page citations.
 
-## Features
+## Why this project matters
 
-- PDF text extraction
-- Text chunking for efficient processing
-- Vector store creation using FAISS
-- Question answering using OpenAI's GPT-4 model
-- User-friendly interface with Streamlit
+The project demonstrates a practical RAG workflow while addressing common prototype risks:
 
-## Installation
+- uploaded documents and vector indexes remain in the current application session;
+- generated answers are constrained to retrieved context;
+- every retrieved passage retains its source filename and page number;
+- missing evidence produces an explicit “not available” response;
+- secrets and generated indexes are excluded from version control.
 
-1. Clone the repository:
-   ```
-   git clone <repository-url>
-   cd <repository-name>
-   ```
+## Architecture
 
-2. Install the required dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
+1. **Ingestion:** `pypdf` extracts text and page metadata.
+2. **Chunking:** LangChain's recursive splitter creates overlapping documents.
+3. **Embedding:** OpenAI embeddings represent document chunks.
+4. **Retrieval:** FAISS returns the four most relevant chunks.
+5. **Generation:** a low-temperature chat model answers from context only.
+6. **Attribution:** the UI displays the retrieved file and page references.
 
-3. Set up your OpenAI API key:
-   - Create a `.env` file in the project root
-   - Add your OpenAI API key: `OPENAI_API_KEY=your_api_key_here`
+## Technology
 
-## Usage
+Python, Streamlit, LangChain, OpenAI, FAISS, pypdf, pytest, Docker and GitHub Actions.
 
-1. Run the Streamlit app:
-   ```
-   streamlit run app.py
-   ```
+## Run locally
 
-2. Open your web browser and navigate to the provided local URL (usually `http://localhost:8501`)
+```bash
+git clone https://github.com/ipurnendu26/Chat-with-multiple-PDFs.git
+cd Chat-with-multiple-PDFs
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+cp .env.example .env
+streamlit run app.py
+```
 
-3. Use the sidebar to upload PDF files and process them
+Set `OPENAI_API_KEY` in `.env`. Optionally set `OPENAI_MODEL`; the default is `gpt-4o-mini`.
 
-4. Once processed, ask questions about the PDF content in the main chat interface
+## Test
 
-## How it works
+```bash
+pytest -q
+```
 
-1. The app extracts text from uploaded PDF files
-2. The extracted text is split into smaller chunks
-3. These chunks are embedded and stored in a FAISS vector store
-4. When a user asks a question, the app searches for relevant chunks in the vector store
-5. The relevant chunks and the user's question are sent to the GPT-4 model
-6. The model generates a response based on the provided context and question
+The tests cover PDF ingestion behavior, chunk validation and preservation of citation metadata. CI runs them on every push and pull request.
 
-## Dependencies
+## Docker
 
-- langchain
-- openai
-- streamlit
-- tiktoken
-- unstructured
-- pdf2image
-- pdfminer
-- PyPDF2
-- langchain-community
-- python-dotenv
-- faiss-cpu
+```bash
+docker build -t cited-pdf-rag .
+docker run --rm -p 8501:8501 --env-file .env cited-pdf-rag
+```
 
-## Note
+## Security and privacy
 
-Ensure you have a valid OpenAI API key with access to the GPT-4 model. The application uses the `gpt-4` model for question answering and the `text-embedding-ada-002` model for text embeddings.
+- Never commit `.env` or API keys.
+- Rotate a credential immediately if it is exposed.
+- This demo sends retrieved text to the configured model provider.
+- Do not upload confidential documents unless the deployment and provider settings meet your requirements.
+- The application does not persist FAISS indexes to disk.
 
+## Limitations
+
+Image-only PDFs require an OCR stage. Retrieval quality depends on document structure, embeddings and the selected model. This project is a portfolio implementation, not a document-compliance system.
+
+## License
+
+MIT
